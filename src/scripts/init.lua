@@ -26,6 +26,54 @@ end
 
 UpdateTheme()
 
+-- Colors handed to Scintilla are 0xBBGGRR integers (see rgb() above).
+local function channels(c)
+    return c & 0xFF, (c >> 8) & 0xFF, (c >> 16) & 0xFF
+end
+
+-- WCAG 2.x relative luminance of a 0xBBGGRR color.
+local function luminance(c)
+    local function lin(v)
+        v = v / 255
+        return (v <= 0.03928) and (v / 12.92) or (((v + 0.055) / 1.055) ^ 2.4)
+    end
+    local r, g, b = channels(c)
+    return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+end
+
+local function contrast(a, b)
+    local la, lb = luminance(a), luminance(b)
+    if la < lb then la, lb = lb, la end
+    return (la + 0.05) / (lb + 0.05)
+end
+
+-- Mix a color towards white by t (0..1), keeping its hue.
+local function lighten(c, t)
+    local r, g, b = channels(c)
+    r = math.floor(r + (255 - r) * t + 0.5)
+    g = math.floor(g + (255 - g) * t + 0.5)
+    b = math.floor(b + (255 - b) * t + 0.5)
+    return r | (g << 8) | (b << 16)
+end
+
+-- Most language definitions were designed for a white background, so in dark mode
+-- colors such as navy operators (0x000080) or pure blue keywords are unreadable.
+-- Lighten just enough to reach WCAG AA contrast (4.5:1) against the background.
+local MIN_CONTRAST = 4.5
+
+function ReadableColor(fg, bg)
+    if not dark_mode or contrast(fg, bg) >= MIN_CONTRAST then
+        return fg
+    end
+    for step = 1, 20 do
+        local candidate = lighten(fg, step * 0.05)
+        if contrast(candidate, bg) >= MIN_CONTRAST then
+            return candidate
+        end
+    end
+    return theme.default_fg
+end
+
 function DetectLanguageFromContents(contents)
     for name, L in pairs(languages) do
         if L.first_line then
@@ -88,6 +136,7 @@ function SetStyle(L)
             -- pass through unchanged since they are readable on dark backgrounds.
             local fg = (style.fgColor == theme.light_fg) and theme.default_fg or style.fgColor
             local bg = (style.bgColor == theme.light_bg) and theme.default_bg or style.bgColor
+            fg = ReadableColor(fg, bg)
             editor.StyleFore[style.id] = fg
             editor.StyleBack[style.id] = bg
 

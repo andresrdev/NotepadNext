@@ -43,6 +43,9 @@
 #include <QScreen>
 #include <QFontDatabase>
 #include <QPalette>
+#include <QStyle>
+#include <QStyleFactory>
+#include <QStyleHints>
 
 #ifdef Q_OS_WIN
 #include <QSimpleUpdater.h>
@@ -1880,10 +1883,38 @@ void MainWindow::applyStyleSheet()
 
     auto *settings = app->getSettings();
     const bool dark = settings->effectiveDarkMode();
+    const bool systemTheme = settings->theme() == ApplicationSettings::SystemTheme;
 
-    if (settings->theme() == ApplicationSettings::SystemTheme) {
+    // Some native styles ignore QApplication::setPalette() for several controls
+    // (combo boxes, spin boxes, menus): "windowsvista" (the default with Qt 6.5 on
+    // Windows) and "macos". For an explicit Light/Dark theme use Fusion there, and
+    // restore the original style when the user goes back to following the system.
+    static const QString originalStyle = QApplication::style()->name();
+    const bool nativeIgnoresPalette = originalStyle.compare(QStringLiteral("windowsvista"), Qt::CaseInsensitive) == 0
+                                   || originalStyle.compare(QStringLiteral("macos"), Qt::CaseInsensitive) == 0;
+    const QString wantedStyle = (!systemTheme && nativeIgnoresPalette) ? QStringLiteral("Fusion") : originalStyle;
+    if (QApplication::style()->name().compare(wantedStyle, Qt::CaseInsensitive) != 0) {
+        QApplication::setStyle(QStyleFactory::create(wantedStyle));
+    }
+
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
+    // Let the platform draw matching window decorations (e.g. a dark title bar on
+    // Windows 11) even when the explicit theme differs from the system setting.
+    QGuiApplication::styleHints()->setColorScheme(systemTheme ? Qt::ColorScheme::Unknown
+                                                  : (dark ? Qt::ColorScheme::Dark : Qt::ColorScheme::Light));
+#endif
+
+    static bool customPaletteApplied = false;
+
+    if (systemTheme) {
         // Follow the desktop environment - leave the Qt-default palette alone.
         // Qt 6.5+ already syncs the palette with QStyleHints::colorScheme().
+        // If an explicit theme was active before, drop its palette: an empty
+        // palette makes Qt fall back to the platform (system) palette again.
+        if (customPaletteApplied) {
+            QApplication::setPalette(QPalette());
+            customPaletteApplied = false;
+        }
     } else {
         // Explicit Light or Dark override - hardcoded palette so the app
         // theme is independent of the system color scheme.
@@ -1901,8 +1932,11 @@ void MainWindow::applyStyleSheet()
             p.setColor(QPalette::ToolTipBase,     QColor(0x25, 0x25, 0x26));
             p.setColor(QPalette::ToolTipText,     QColor(0xD4, 0xD4, 0xD4));
             p.setColor(QPalette::Link,            QColor(0x40, 0xA0, 0xFF));
-            p.setColor(QPalette::Disabled, QPalette::Text,       QColor(0x66, 0x66, 0x66));
-            p.setColor(QPalette::Disabled, QPalette::ButtonText, QColor(0x66, 0x66, 0x66));
+            // Disabled roles: ~5:1 against the window color (was #666666, ~2.6:1).
+            // WindowText is what disabled check box / label text uses.
+            p.setColor(QPalette::Disabled, QPalette::WindowText, QColor(0x8C, 0x8C, 0x8C));
+            p.setColor(QPalette::Disabled, QPalette::Text,       QColor(0x8C, 0x8C, 0x8C));
+            p.setColor(QPalette::Disabled, QPalette::ButtonText, QColor(0x8C, 0x8C, 0x8C));
         } else {
             p.setColor(QPalette::Window,          QColor(0xF0, 0xF0, 0xF0));
             p.setColor(QPalette::WindowText,      QColor(0x00, 0x00, 0x00));
@@ -1916,10 +1950,12 @@ void MainWindow::applyStyleSheet()
             p.setColor(QPalette::ToolTipBase,     QColor(0xFF, 0xFF, 0xDC));
             p.setColor(QPalette::ToolTipText,     QColor(0x00, 0x00, 0x00));
             p.setColor(QPalette::Link,            QColor(0x00, 0x00, 0xEE));
-            p.setColor(QPalette::Disabled, QPalette::Text,       QColor(0x99, 0x99, 0x99));
-            p.setColor(QPalette::Disabled, QPalette::ButtonText, QColor(0x99, 0x99, 0x99));
+            p.setColor(QPalette::Disabled, QPalette::WindowText, QColor(0x6D, 0x6D, 0x6D));
+            p.setColor(QPalette::Disabled, QPalette::Text,       QColor(0x6D, 0x6D, 0x6D));
+            p.setColor(QPalette::Disabled, QPalette::ButtonText, QColor(0x6D, 0x6D, 0x6D));
         }
         QApplication::setPalette(p);
+        customPaletteApplied = true;
     }
 
     // Targeted CSS for custom widgets (ADS dock tabs, QuickFindWidget, status bar)
